@@ -24,6 +24,12 @@
 
 
 #define MAX_PATTERN_NUM 5
+#define TREX_INTEL_FLOW_PRIORITY_HIGHEST 0
+#define TREX_INTEL_FLOW_PRIORITY_LOW 1
+
+static bool filter_hw_mode_is_intel(dpdk_filter_hw_nic_t hw_mode) {
+    return (hw_mode == fhtINTEL_NO_DOT1Q) || (hw_mode == fhtINTEL_DOT1Q);
+}
 
 static struct rte_flow * filter_tos_flow_to_rq(uint8_t port_id,
                                                uint8_t rx_q,
@@ -56,6 +62,9 @@ static struct rte_flow * filter_tos_flow_to_rq(uint8_t port_id,
 	 */
 	memset(&attr, 0, sizeof(struct rte_flow_attr));
 	attr.ingress = 1;
+    if (filter_hw_mode_is_intel(hw_mode)) {
+        attr.priority = TREX_INTEL_FLOW_PRIORITY_HIGHEST;
+    }
 
 	/*
 	 * create the action sequence.
@@ -155,10 +164,14 @@ static struct rte_flow * filter_drop_all(uint8_t port_id,
 	 */
 	memset(&attr, 0, sizeof(struct rte_flow_attr));
 	attr.ingress = 1;
-    //if (hw_mode == fhtMLX){
-        //attr.group =1;  
-        //attr.priority =1;/* not supported yet*/
-    //}
+    if (filter_hw_mode_is_intel(hw_mode)) {
+        /*
+         * Intel ICE supports two rte_flow priorities. Keep TRex latency/control
+         * TOS rules at priority 0 and install the catch-all drop rule below
+         * them so E810 does not drop latency return packets before RX steering.
+         */
+        attr.priority = TREX_INTEL_FLOW_PRIORITY_LOW;
+    }
 
 	/*
 	 * create the action sequence.
@@ -392,7 +405,4 @@ CDpdkFilterPort * CDpdkFilterManager::get_port(repid_t repid){
     m_port[repid]=lp;
     return(lp);
 }
-
-
-
 
