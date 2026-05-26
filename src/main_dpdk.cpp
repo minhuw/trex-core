@@ -26,6 +26,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <zmq.h>
+#include <atomic>
 #include <sys/time.h>
 #include <rte_config.h>
 #include <rte_common.h>
@@ -78,6 +79,68 @@ extern "C" {
 /* stateless */
 #include "stl/trex_stl.h"
 #include "stl/trex_stl_stream_node.h"
+
+namespace {
+
+std::atomic<uint32_t> g_rhea_latency_tx_diag_seen(0);
+
+void rhea_dump_latency_tx_diag(uint8_t core_id,
+                               uint8_t tx_queue_id,
+                               uint8_t tx_queue_id_lat,
+                               uint16_t port_id,
+                               const rte_mbuf_t *m,
+                               const struct flow_stat_payload_header *fsp_head) {
+    uint32_t seen = g_rhea_latency_tx_diag_seen.fetch_add(1);
+    if (seen >= 128) {
+        return;
+    }
+
+    const uint8_t *pkt = rte_pktmbuf_mtod(m, const uint8_t *);
+    uint16_t len = rte_pktmbuf_pkt_len(m);
+    uint16_t eth_type = 0;
+    uint8_t tos = 0;
+    uint8_t proto = 0;
+    uint16_t ip_id = 0;
+    uint8_t src[4] = {0, 0, 0, 0};
+    uint8_t dst[4] = {0, 0, 0, 0};
+
+    if (len >= 34) {
+        eth_type = (uint16_t(pkt[12]) << 8) | pkt[13];
+        if (eth_type == EthernetHeader::Protocol::IP) {
+            tos = pkt[15];
+            ip_id = (uint16_t(pkt[18]) << 8) | pkt[19];
+            proto = pkt[23];
+            memcpy(src, pkt + 26, sizeof(src));
+            memcpy(dst, pkt + 30, sizeof(dst));
+        }
+    }
+
+    printf("rhea-e810-lat-tx sample=%u core=%u port=%u txq=%u lat_txq=%u len=%u eth=0x%04x "
+           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u ip_id=0x%04x "
+           "magic=0x%02x hw_id=%u flow_seq=%u seq=%u ts=%lu mbuf=%p data=%p\n",
+           seen,
+           core_id,
+           port_id,
+           tx_queue_id,
+           tx_queue_id_lat,
+           len,
+           eth_type,
+           src[0], src[1], src[2], src[3],
+           dst[0], dst[1], dst[2], dst[3],
+           tos,
+           proto,
+           ip_id,
+           fsp_head ? fsp_head->magic : 0,
+           fsp_head ? fsp_head->hw_id : 0,
+           fsp_head ? fsp_head->flow_seq : 0,
+           fsp_head ? fsp_head->seq : 0,
+           fsp_head ? (unsigned long)fsp_head->time_stamp : 0,
+           (const void *)m,
+           pkt);
+    fflush(stdout);
+}
+
+}
 
 /* stateful */
 #include "stf/trex_stf.h"
@@ -2287,6 +2350,12 @@ HOT_FUNC rte_mbuf* CCoreEthIFStateless::update_node_flow_stat(rte_mbuf *m, CGenN
     } else {
         if (hw_id >= MAX_FLOW_STATS) {
             fsp_head->time_stamp = os_get_hr_tick_64();
+            rhea_dump_latency_tx_diag(m_core_id,
+                                      lp_port->m_tx_queue_id,
+                                      lp_port->m_tx_queue_id_lat,
+                                      lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
+                                      mi,
+                                      fsp_head);
         }
     }
     return mi;
