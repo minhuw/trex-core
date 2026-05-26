@@ -83,6 +83,100 @@ extern "C" {
 namespace {
 
 std::atomic<uint32_t> g_rhea_latency_tx_diag_seen(0);
+std::atomic<uint32_t> g_rhea_latency_data_enqueue_seen(0);
+std::atomic<uint32_t> g_rhea_latency_data_flush_seen(0);
+
+struct rhea_latency_pkt_info {
+    uint16_t len;
+    uint16_t data_len;
+    uint16_t eth_type;
+    uint16_t ip_id;
+    uint8_t tos;
+    uint8_t ttl;
+    uint8_t proto;
+    const uint8_t *pkt;
+    const uint8_t *fsp;
+};
+
+bool rhea_get_latency_pkt_info(const rte_mbuf_t *m, rhea_latency_pkt_info &info) {
+    info.len = rte_pktmbuf_pkt_len(m);
+    info.data_len = rte_pktmbuf_data_len(m);
+    if (info.len < 50 || info.data_len < info.len) {
+        return false;
+    }
+
+    info.pkt = rte_pktmbuf_mtod(m, const uint8_t *);
+    info.eth_type = ((uint16_t)info.pkt[12] << 8) | info.pkt[13];
+    if (info.eth_type != EthernetHeader::Protocol::IP) {
+        return false;
+    }
+
+    info.tos = info.pkt[15];
+    info.ip_id = ((uint16_t)info.pkt[18] << 8) | info.pkt[19];
+    info.ttl = info.pkt[22];
+    info.proto = info.pkt[23];
+    info.fsp = info.pkt + info.len - sizeof(struct flow_stat_payload_header);
+    if (info.tos != 0x01 || info.ip_id != 0xffff || info.fsp[0] != FLOW_STAT_PAYLOAD_MAGIC) {
+        return false;
+    }
+
+    return true;
+}
+
+void rhea_dump_latency_data_path_diag(const char *tag,
+                                      std::atomic<uint32_t> &seen_ctr,
+                                      uint8_t core_id,
+                                      uint8_t tx_queue_id,
+                                      uint8_t tx_queue_id_lat,
+                                      uint16_t port_id,
+                                      uint16_t idx,
+                                      uint16_t burst_len,
+                                      const rte_mbuf_t *m) {
+    rhea_latency_pkt_info info;
+    if (!rhea_get_latency_pkt_info(m, info)) {
+        return;
+    }
+
+    uint32_t seen = seen_ctr.fetch_add(1);
+    if (seen >= 4096 && (seen % 100000) != 0) {
+        return;
+    }
+
+    printf("%s sample=%u core=%u port=%u txq=%u lat_txq=%u idx=%u burst=%u len=%u data_len=%u "
+           "eth_src=%02x:%02x:%02x:%02x:%02x:%02x eth_dst=%02x:%02x:%02x:%02x:%02x:%02x "
+           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x ttl=%u proto=%u ip_id=0x%04x "
+           "magic=0x%02x hw_id=%u flow_seq=%u seq=%u ts=%lu mbuf=%p data=%p\n",
+           tag,
+           seen,
+           core_id,
+           port_id,
+           tx_queue_id,
+           tx_queue_id_lat,
+           idx,
+           burst_len,
+           info.len,
+           info.data_len,
+           info.pkt[6], info.pkt[7], info.pkt[8], info.pkt[9], info.pkt[10], info.pkt[11],
+           info.pkt[0], info.pkt[1], info.pkt[2], info.pkt[3], info.pkt[4], info.pkt[5],
+           info.pkt[26], info.pkt[27], info.pkt[28], info.pkt[29],
+           info.pkt[30], info.pkt[31], info.pkt[32], info.pkt[33],
+           info.tos,
+           info.ttl,
+           info.proto,
+           info.ip_id,
+           info.fsp[0],
+           (uint16_t)info.fsp[2] | ((uint16_t)info.fsp[3] << 8),
+           info.fsp[1],
+           (uint32_t)info.fsp[4] | ((uint32_t)info.fsp[5] << 8) |
+               ((uint32_t)info.fsp[6] << 16) | ((uint32_t)info.fsp[7] << 24),
+           (unsigned long)((uint64_t)info.fsp[8] | ((uint64_t)info.fsp[9] << 8) |
+               ((uint64_t)info.fsp[10] << 16) | ((uint64_t)info.fsp[11] << 24) |
+               ((uint64_t)info.fsp[12] << 32) | ((uint64_t)info.fsp[13] << 40) |
+               ((uint64_t)info.fsp[14] << 48) | ((uint64_t)info.fsp[15] << 56)),
+           (const void *)m,
+           info.pkt);
+    fflush(stdout);
+}
 
 void rhea_dump_latency_tx_diag(uint8_t core_id,
                                uint8_t tx_queue_id,
@@ -2045,6 +2139,18 @@ HOT_FUNC int  CCoreEthIF::send_burst(CCorePerPort * lp_port,
                            uint16_t len,
                            CVirtualIFPerSideStats  * lp_stats){
 
+    for (uint16_t i = 0; i < len; i++) {
+        rhea_dump_latency_data_path_diag("rhea-e810-data-flush",
+                                         g_rhea_latency_data_flush_seen,
+                                         m_core_id,
+                                         lp_port->m_tx_queue_id,
+                                         lp_port->m_tx_queue_id_lat,
+                                         lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
+                                         i,
+                                         len,
+                                         lp_port->m_table[i]);
+    }
+
     uint16_t ret = lp_port->m_port->tx_burst(lp_port->m_tx_queue_id,lp_port->m_table,len);
     if (likely( CGlobalInfo::m_options.m_is_queuefull_retry )) {
         while ( unlikely( ret<len ) ){
@@ -2078,6 +2184,15 @@ int HOT_FUNC CCoreEthIF::send_pkt(CCorePerPort * lp_port,
 
     uint16_t len = lp_port->m_len;
     lp_port->m_table[len]=m;
+    rhea_dump_latency_data_path_diag("rhea-e810-data-enqueue",
+                                     g_rhea_latency_data_enqueue_seen,
+                                     m_core_id,
+                                     lp_port->m_tx_queue_id,
+                                     lp_port->m_tx_queue_id_lat,
+                                     lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
+                                     len,
+                                     len + 1,
+                                     m);
     len++;
 
     /* enough pkts to be sent */
