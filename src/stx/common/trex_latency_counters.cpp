@@ -30,14 +30,20 @@ void dump_rx_latency_diag(const rte_mbuf_t *m,
     uint16_t len = rte_pktmbuf_pkt_len(m);
     uint16_t eth_type = 0;
     uint8_t tos = 0;
+    uint8_t ttl = 0;
     uint8_t proto = 0;
+    uint8_t eth_src[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t eth_dst[6] = {0, 0, 0, 0, 0, 0};
     uint8_t src[4] = {0, 0, 0, 0};
     uint8_t dst[4] = {0, 0, 0, 0};
 
     if (len >= 34) {
+        memcpy(eth_dst, pkt, sizeof(eth_dst));
+        memcpy(eth_src, pkt + 6, sizeof(eth_src));
         eth_type = (uint16_t(pkt[12]) << 8) | pkt[13];
         if (eth_type == EthernetHeader::Protocol::IP) {
             tos = pkt[15];
+            ttl = pkt[22];
             proto = pkt[23];
             memcpy(src, pkt + 26, sizeof(src));
             memcpy(dst, pkt + 30, sizeof(dst));
@@ -45,15 +51,19 @@ void dump_rx_latency_diag(const rte_mbuf_t *m,
     }
 
     printf("rhea-e810-lat-diag sample=%u len=%u eth=0x%04x "
-           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u "
+           "eth_src=%02x:%02x:%02x:%02x:%02x:%02x eth_dst=%02x:%02x:%02x:%02x:%02x:%02x "
+           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x ttl=%u proto=%u "
            "ip_id=0x%04x magic=0x%02x hw_id=%u flow_seq=%u seq=%u "
            "ts_valid=%u\n",
            seen,
            len,
            eth_type,
+           eth_src[0], eth_src[1], eth_src[2], eth_src[3], eth_src[4], eth_src[5],
+           eth_dst[0], eth_dst[1], eth_dst[2], eth_dst[3], eth_dst[4], eth_dst[5],
            src[0], src[1], src[2], src[3],
            dst[0], dst[1], dst[2], dst[3],
            tos,
+           ttl,
            proto,
            uint16_t(ip_id),
            fsp_head ? fsp_head->magic : 0,
@@ -76,14 +86,20 @@ void dump_rx_latency_reject_diag(const rte_mbuf_t *m,
     uint16_t len = rte_pktmbuf_pkt_len(m);
     uint16_t eth_type = 0;
     uint8_t tos = 0;
+    uint8_t ttl = 0;
     uint8_t proto = 0;
+    uint8_t eth_src[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t eth_dst[6] = {0, 0, 0, 0, 0, 0};
     uint8_t src[4] = {0, 0, 0, 0};
     uint8_t dst[4] = {0, 0, 0, 0};
 
     if (len >= 34) {
+        memcpy(eth_dst, pkt, sizeof(eth_dst));
+        memcpy(eth_src, pkt + 6, sizeof(eth_src));
         eth_type = (uint16_t(pkt[12]) << 8) | pkt[13];
         if (eth_type == EthernetHeader::Protocol::IP) {
             tos = pkt[15];
+            ttl = pkt[22];
             proto = pkt[23];
             memcpy(src, pkt + 26, sizeof(src));
             memcpy(dst, pkt + 30, sizeof(dst));
@@ -91,15 +107,19 @@ void dump_rx_latency_reject_diag(const rte_mbuf_t *m,
     }
 
     printf("rhea-e810-lat-reject sample=%u len=%u eth=0x%04x "
-           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u "
+           "eth_src=%02x:%02x:%02x:%02x:%02x:%02x eth_dst=%02x:%02x:%02x:%02x:%02x:%02x "
+           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x ttl=%u proto=%u "
            "ip_id=0x%04x magic=0x%02x hw_id=%u flow_seq=%u seq=%u "
            "ts_valid=%u\n",
            seen,
            len,
            eth_type,
+           eth_src[0], eth_src[1], eth_src[2], eth_src[3], eth_src[4], eth_src[5],
+           eth_dst[0], eth_dst[1], eth_dst[2], eth_dst[3], eth_dst[4], eth_dst[5],
            src[0], src[1], src[2], src[3],
            dst[0], dst[1], dst[2], dst[3],
            tos,
+           ttl,
            proto,
            uint16_t(ip_id),
            fsp_head ? fsp_head->magic : 0,
@@ -126,16 +146,22 @@ void dump_rx_latency_sample_diag(const char *tag,
     uint16_t len = rte_pktmbuf_pkt_len(m);
     uint16_t eth_type = 0;
     uint8_t tos = 0;
+    uint8_t ttl = 0;
     uint8_t proto = 0;
     uint16_t ip_id = 0;
+    uint8_t eth_src[6] = {0, 0, 0, 0, 0, 0};
+    uint8_t eth_dst[6] = {0, 0, 0, 0, 0, 0};
     uint8_t src[4] = {0, 0, 0, 0};
     uint8_t dst[4] = {0, 0, 0, 0};
 
     if (len >= 34) {
+        memcpy(eth_dst, pkt, sizeof(eth_dst));
+        memcpy(eth_src, pkt + 6, sizeof(eth_src));
         eth_type = (uint16_t(pkt[12]) << 8) | pkt[13];
         if (eth_type == EthernetHeader::Protocol::IP) {
             tos = pkt[15];
             ip_id = (uint16_t(pkt[18]) << 8) | pkt[19];
+            ttl = pkt[22];
             proto = pkt[23];
             memcpy(src, pkt + 26, sizeof(src));
             memcpy(dst, pkt + 30, sizeof(dst));
@@ -143,16 +169,20 @@ void dump_rx_latency_sample_diag(const char *tag,
     }
 
     printf("%s sample=%u len=%u eth=0x%04x "
-           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u ip_id=0x%04x "
+           "eth_src=%02x:%02x:%02x:%02x:%02x:%02x eth_dst=%02x:%02x:%02x:%02x:%02x:%02x "
+           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x ttl=%u proto=%u ip_id=0x%04x "
            "magic=0x%02x hw_id=%u flow_seq=%u seq=%u exp_seq=%u "
            "delta_ticks=%" PRId64 " mbuf=%p data=%p ol_flags=0x%" PRIx64 "\n",
            tag,
            seen,
            pkt_len,
            eth_type,
+           eth_src[0], eth_src[1], eth_src[2], eth_src[3], eth_src[4], eth_src[5],
+           eth_dst[0], eth_dst[1], eth_dst[2], eth_dst[3], eth_dst[4], eth_dst[5],
            src[0], src[1], src[2], src[3],
            dst[0], dst[1], dst[2], dst[3],
            tos,
+           ttl,
            proto,
            ip_id,
            fsp_head->magic,
