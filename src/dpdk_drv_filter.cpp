@@ -158,6 +158,7 @@ static struct rte_flow * filter_drop_all(uint8_t port_id,
 	struct rte_flow_item_eth eth_mask;
 	struct rte_flow_item_any any_spec;
 	struct rte_flow_item_any any_mask;
+	struct rte_flow_action_queue queue = { .index = MAIN_DPDK_DROP_Q };
 
 	int res;
 
@@ -173,8 +174,9 @@ static struct rte_flow * filter_drop_all(uint8_t port_id,
     if (filter_hw_mode_is_intel(hw_mode)) {
         /*
          * Intel ICE supports two rte_flow priorities. Keep TRex latency/control
-         * TOS rules at priority 0 and install the catch-all drop rule below
-         * them so E810 does not drop latency return packets before RX steering.
+         * TOS rules at priority 0 and install the catch-all rule below them.
+         * ICE is routed to queue 0 instead of DROP because the DROP action
+         * appears to shadow the higher-priority TOS steering rule on E810.
          */
         attr.priority = TREX_INTEL_FLOW_PRIORITY_LOW;
     }
@@ -184,7 +186,12 @@ static struct rte_flow * filter_drop_all(uint8_t port_id,
 	 * one action only,  move packet to queue
 	 */
 
-    action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+    if (filter_hw_mode_is_intel(hw_mode)) {
+        action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+        action[0].conf = &queue;
+    } else {
+        action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+    }
     action[1].type = RTE_FLOW_ACTION_TYPE_END;
 
 	/*
@@ -338,8 +345,10 @@ void CDpdkFilterPort::set_drop_all_filter(bool enable){
     if (enable){
         m_rx_drop_all = filter_drop_all(m_repid,m_hw_mode,&error);
         check_dpdk_filter_result(m_rx_drop_all,&error);
-        printf("rhea-e810-flow drop-all port=%u hw_mode=%u flow=%p\n",
-               (unsigned)m_repid, (unsigned)m_hw_mode, m_rx_drop_all);
+        printf("rhea-e810-flow catch-all port=%u hw_mode=%u action=%s flow=%p\n",
+               (unsigned)m_repid, (unsigned)m_hw_mode,
+               filter_hw_mode_is_intel(m_hw_mode) ? "queue0" : "drop",
+               m_rx_drop_all);
     }else{
         clear_filter(m_rx_drop_all);
     }
@@ -366,12 +375,7 @@ void CDpdkFilterPort::_set_mode(dpdk_filter_mode_t mode,
         break;
     case mfDROP_ALL_PASS_TOS:
         set_tos_filter(enable);
-        if (filter_hw_mode_is_intel(m_hw_mode)) {
-            printf("rhea-e810-flow skip-drop-all port=%u hw_mode=%u enable=%u\n",
-                   (unsigned)m_repid, (unsigned)m_hw_mode, (unsigned)enable);
-        } else {
-            set_drop_all_filter(enable);
-        }
+        set_drop_all_filter(enable);
         break;
     case mfPASS_TOS:
         set_tos_filter(enable);
