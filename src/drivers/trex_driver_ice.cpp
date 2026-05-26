@@ -25,8 +25,11 @@
 std::string CTRexExtendedDriverIce::ice_so_str = "";
 
 CTRexExtendedDriverIce::CTRexExtendedDriverIce() {
-    m_cap = tdCAP_ALL | TREX_DRV_CAP_MAC_ADDR_CHG | TREX_DRV_CAP_DROP_PKTS_IF_LNK_DOWN ;
-    //m_cap = tdCAP_ONE_QUE | tdCAP_MULTI_QUE  | TREX_DRV_CAP_MAC_ADDR_CHG |TREX_DRV_CAP_DROP_PKTS_IF_LNK_DOWN ;
+    /*
+     * Diagnostic E810 mode: avoid DROP_QUE_FILTER so STL latency traffic uses
+     * software/multiqueue RX instead of ICE rte_flow steering.
+     */
+    m_cap = tdCAP_ONE_QUE | tdCAP_MULTI_QUE | TREX_DRV_CAP_MAC_ADDR_CHG | TREX_DRV_CAP_DROP_PKTS_IF_LNK_DOWN ;
 
     for ( int i=0; i<TREX_MAX_PORTS; i++ ) {
         m_port_xstats[i] = {0};
@@ -114,4 +117,3 @@ void CTRexExtendedDriverIce::get_rx_stat_capabilities(uint16_t &flags, uint16_t 
     num_counters = 127; //With MAX_FLOW_STATS we saw packet failures in rx_test. Need to check.
     base_ip_id = IP_ID_RESERVE_BASE;
 }
-
