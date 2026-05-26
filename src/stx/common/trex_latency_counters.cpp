@@ -459,12 +459,6 @@ void RXLatency::handle_pkt(const rte_mbuf_t *m, int port) {
     uint32_t ip_id = 0;
     parser.get_ip_id(ip_id);
 
-    // in case of software mode, give priorty to meta-data checked 
-    if (m_rcv_all) {
-        if ( handle_flow_latency_stats(m, ip_id,true) ) {
-            return;
-        }
-    }
     // valid IP 
     if (res == FSTAT_PARSER_E_OK){
         if (is_flow_stat_id(ip_id)) {
@@ -477,7 +471,20 @@ void RXLatency::handle_pkt(const rte_mbuf_t *m, int port) {
             } else {
                 update_flow_stats(m, ip_id);
             }
+        } else if (m_rcv_all && parser.has_tos_to_cpu()) {
+            /* In software/pass-all mode the RX core sees ordinary data traffic
+             * that hardware filters would have discarded. Only apply the
+             * payload-magic fallback to valid IP packets explicitly marked by
+             * TRex for the RX core; non-IP/proxy packets keep the unrestricted
+             * fallback below.
+             */
+            handle_flow_latency_stats(m, ip_id,true);
         }
+        return;
+    }
+
+    if (m_rcv_all) {
+        handle_flow_latency_stats(m, ip_id,true);
     }
 
 }
