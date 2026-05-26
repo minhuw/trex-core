@@ -7,6 +7,7 @@
 namespace {
 
 std::atomic<uint32_t> g_rx_latency_diag_seen(0);
+std::atomic<uint32_t> g_rx_latency_reject_seen(0);
 
 void dump_rx_latency_diag(const rte_mbuf_t *m,
                           uint32_t ip_id,
@@ -36,6 +37,52 @@ void dump_rx_latency_diag(const rte_mbuf_t *m,
     }
 
     printf("rhea-e810-lat-diag sample=%u len=%u eth=0x%04x "
+           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u "
+           "ip_id=0x%04x magic=0x%02x hw_id=%u flow_seq=%u seq=%u "
+           "ts_valid=%u\n",
+           seen,
+           len,
+           eth_type,
+           src[0], src[1], src[2], src[3],
+           dst[0], dst[1], dst[2], dst[3],
+           tos,
+           proto,
+           uint16_t(ip_id),
+           fsp_head ? fsp_head->magic : 0,
+           fsp_head ? fsp_head->hw_id : 0,
+           fsp_head ? fsp_head->flow_seq : 0,
+           fsp_head ? fsp_head->seq : 0,
+           ts_valid ? 1 : 0);
+}
+
+void dump_rx_latency_reject_diag(const rte_mbuf_t *m,
+                                 uint32_t ip_id,
+                                 struct flow_stat_payload_header *fsp_head,
+                                 bool ts_valid) {
+    uint32_t seen = g_rx_latency_reject_seen.fetch_add(1);
+    if (seen >= 64) {
+        return;
+    }
+
+    uint8_t *pkt = rte_pktmbuf_mtod(m, uint8_t *);
+    uint16_t len = rte_pktmbuf_pkt_len(m);
+    uint16_t eth_type = 0;
+    uint8_t tos = 0;
+    uint8_t proto = 0;
+    uint8_t src[4] = {0, 0, 0, 0};
+    uint8_t dst[4] = {0, 0, 0, 0};
+
+    if (len >= 34) {
+        eth_type = (uint16_t(pkt[12]) << 8) | pkt[13];
+        if (eth_type == EthernetHeader::Protocol::IP) {
+            tos = pkt[15];
+            proto = pkt[23];
+            memcpy(src, pkt + 26, sizeof(src));
+            memcpy(dst, pkt + 30, sizeof(dst));
+        }
+    }
+
+    printf("rhea-e810-lat-reject sample=%u len=%u eth=0x%04x "
            "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u "
            "ip_id=0x%04x magic=0x%02x hw_id=%u flow_seq=%u seq=%u "
            "ts_valid=%u\n",
@@ -493,8 +540,15 @@ bool RXLatency::handle_flow_latency_stats(const rte_mbuf_t *m, uint32_t& ip_id,b
             hr_time_now = os_get_hr_tick_64();
             readtime = true;
         }
+        bool ts_valid = fsp_head->is_valid_ts(hr_time_now);
+        if (unlikely((fsp_head->magic != FLOW_STAT_PAYLOAD_MAGIC) ||
+                     (fsp_head->hw_id >= MAX_FLOW_STATS_PAYLOAD) ||
+                     !ts_valid)) {
+            dump_rx_latency_reject_diag(m, ip_id, fsp_head, ts_valid);
+            return false;
+        }
         if (unlikely(m_rcv_all)) {
-            dump_rx_latency_diag(m, ip_id, fsp_head, fsp_head->is_valid_ts(hr_time_now));
+            dump_rx_latency_diag(m, ip_id, fsp_head, ts_valid);
         }
         update_stats_for_pkt(fsp_head, m->pkt_len, hr_time_now);
         return true;
