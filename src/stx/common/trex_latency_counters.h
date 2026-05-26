@@ -197,10 +197,10 @@ private:
         CRFC2544Info *curr_rfc2544,
         uint32_t pkt_len,
         hr_time_t hr_time_now);
-    void check_seq_number_and_update_stats(
+    bool check_seq_number_and_update_stats(
         flow_stat_payload_header *fsp_head,
         CRFC2544Info *curr_rfc2544);
-    void check_seq_number_and_update_stats_ieee_1588(
+    bool check_seq_number_and_update_stats_ieee_1588(
         flow_stat_payload_header_ieee_1588 *fsp_head,
         CRFC2544Info *curr_rfc2544);
     void handle_seq_number_smaller_than_expected(
@@ -244,4 +244,3 @@ public:
 std::ostream& operator<<(std::ostream& os, const RXLatency& in);
 
 #endif /* __TREX_LATENCY_COUNTERS_H__ */
-

@@ -3,11 +3,14 @@
 
 #include <atomic>
 #include <cstring>
+#include <inttypes.h>
 
 namespace {
 
 std::atomic<uint32_t> g_rx_latency_diag_seen(0);
 std::atomic<uint32_t> g_rx_latency_reject_seen(0);
+std::atomic<uint32_t> g_rx_latency_accept_seen(0);
+std::atomic<uint32_t> g_rx_latency_skip_seen(0);
 
 void dump_rx_latency_diag(const rte_mbuf_t *m,
                           uint32_t ip_id,
@@ -99,6 +102,31 @@ void dump_rx_latency_reject_diag(const rte_mbuf_t *m,
            fsp_head ? fsp_head->flow_seq : 0,
            fsp_head ? fsp_head->seq : 0,
            ts_valid ? 1 : 0);
+}
+
+void dump_rx_latency_sample_diag(const char *tag,
+                                 std::atomic<uint32_t> &counter,
+                                 struct flow_stat_payload_header *fsp_head,
+                                 uint32_t exp_seq,
+                                 uint32_t pkt_len,
+                                 hr_time_t hr_time_now) {
+    uint32_t seen = counter.fetch_add(1);
+    if (seen >= 64) {
+        return;
+    }
+
+    int64_t delta = hr_time_now - fsp_head->time_stamp;
+
+    printf("%s sample=%u len=%u hw_id=%u flow_seq=%u seq=%u exp_seq=%u "
+           "delta_ticks=%" PRId64 "\n",
+           tag,
+           seen,
+           pkt_len,
+           fsp_head->hw_id,
+           fsp_head->flow_seq,
+           fsp_head->seq,
+           exp_seq,
+           delta);
 }
 
 }
@@ -728,10 +756,26 @@ RXLatency::handle_correct_flow(
         CRFC2544Info *curr_rfc2544,
         uint32_t pkt_len,
         hr_time_t hr_time_now) {
-    check_seq_number_and_update_stats(fsp_head, curr_rfc2544);
+    uint32_t exp_seq = curr_rfc2544->get_seq();
+    bool update_latency = check_seq_number_and_update_stats(fsp_head, curr_rfc2544);
     uint16_t hw_id = fsp_head->hw_id;
     m_rx_pg_stat_payload[hw_id].add_pkts(1);
     m_rx_pg_stat_payload[hw_id].add_bytes(pkt_len + 4); // +4 for ethernet CRC
+    if (!update_latency) {
+        dump_rx_latency_sample_diag("rhea-e810-lat-skip",
+                                    g_rx_latency_skip_seen,
+                                    fsp_head,
+                                    exp_seq,
+                                    pkt_len,
+                                    hr_time_now);
+        return;
+    }
+    dump_rx_latency_sample_diag("rhea-e810-lat-accept",
+                                g_rx_latency_accept_seen,
+                                fsp_head,
+                                exp_seq,
+                                pkt_len,
+                                hr_time_now);
     uint64_t d = (hr_time_now - fsp_head->time_stamp );
     dsec_t ctime = ptime_convert_hr_dsec(d);
     curr_rfc2544->add_sample(ctime);
@@ -743,12 +787,12 @@ RXLatency::handle_correct_flow_ieee_1588(
         CRFC2544Info *curr_rfc2544,
         uint32_t pkt_len,
         hr_time_t hr_time_now) {
-    check_seq_number_and_update_stats_ieee_1588(fsp_head, curr_rfc2544);
+    bool update_latency = check_seq_number_and_update_stats_ieee_1588(fsp_head, curr_rfc2544);
     uint16_t hw_id = fsp_head->fsp_hdr.hw_id;
     m_rx_pg_stat_payload[hw_id].add_pkts(1);
     m_rx_pg_stat_payload[hw_id].add_bytes(pkt_len + 4); // +4 for ethernet CRC
 
-    if (fsp_head->ptp_message.hdr.msg_type == FOLLOW_UP ) {
+    if (fsp_head->ptp_message.hdr.msg_type == FOLLOW_UP && update_latency) {
         uint64_t d = (hr_time_now - fsp_head->fsp_hdr.time_stamp );
         if (d > NSEC_PER_SEC) {
             /*
@@ -773,7 +817,7 @@ RXLatency::handle_correct_flow_ieee_1588(
     }
 }
 
-void
+bool
 RXLatency::check_seq_number_and_update_stats(
         flow_stat_payload_header *fsp_head,
         CRFC2544Info *curr_rfc2544) {
@@ -783,6 +827,7 @@ RXLatency::check_seq_number_and_update_stats(
         if ((int32_t)(pkt_seq - exp_seq) < 0) {
             handle_seq_number_smaller_than_expected(
                 curr_rfc2544, pkt_seq, exp_seq);
+            return false;
         } else {
             handle_seq_number_bigger_than_expected(
                 curr_rfc2544, pkt_seq, exp_seq);
@@ -793,9 +838,10 @@ RXLatency::check_seq_number_and_update_stats(
             curr_rfc2544->check_seqblks();
         }
     }
+    return true;
 }
 
-void
+bool
 RXLatency::check_seq_number_and_update_stats_ieee_1588(
         flow_stat_payload_header_ieee_1588 *fsp_head,
         CRFC2544Info *curr_rfc2544) {
@@ -805,6 +851,7 @@ RXLatency::check_seq_number_and_update_stats_ieee_1588(
         if ((int32_t)(pkt_seq - exp_seq) < 0) {
             handle_seq_number_smaller_than_expected(
                 curr_rfc2544, pkt_seq, exp_seq);
+            return false;
         } else {
             handle_seq_number_bigger_than_expected(
                 curr_rfc2544, pkt_seq, exp_seq);
@@ -817,6 +864,7 @@ RXLatency::check_seq_number_and_update_stats_ieee_1588(
             }
         }
     }
+    return true;
 }
 
 void
