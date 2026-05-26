@@ -25,11 +25,8 @@
 std::string CTRexExtendedDriverIce::ice_so_str = "";
 
 CTRexExtendedDriverIce::CTRexExtendedDriverIce() {
-    /*
-     * Diagnostic E810 mode: avoid DROP_QUE_FILTER so STL latency traffic uses
-     * software/multiqueue RX instead of ICE rte_flow steering.
-     */
-    m_cap = tdCAP_ONE_QUE | tdCAP_MULTI_QUE | TREX_DRV_CAP_MAC_ADDR_CHG | TREX_DRV_CAP_DROP_PKTS_IF_LNK_DOWN ;
+    m_cap = tdCAP_ALL | TREX_DRV_CAP_MAC_ADDR_CHG | TREX_DRV_CAP_DROP_PKTS_IF_LNK_DOWN ;
+    //m_cap = tdCAP_ONE_QUE | tdCAP_MULTI_QUE  | TREX_DRV_CAP_MAC_ADDR_CHG |TREX_DRV_CAP_DROP_PKTS_IF_LNK_DOWN ;
 
     for ( int i=0; i<TREX_MAX_PORTS; i++ ) {
         m_port_xstats[i] = {0};
