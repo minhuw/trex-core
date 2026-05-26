@@ -12,6 +12,11 @@ std::atomic<uint32_t> g_rx_latency_reject_seen(0);
 std::atomic<uint32_t> g_rx_latency_accept_seen(0);
 std::atomic<uint32_t> g_rx_latency_skip_seen(0);
 
+bool should_dump_rx_latency_sample(uint32_t seen) {
+    return seen < 64 || (seen < 4096 && (seen & (seen - 1)) == 0) ||
+           (seen % 1000000) == 0;
+}
+
 void dump_rx_latency_diag(const rte_mbuf_t *m,
                           uint32_t ip_id,
                           struct flow_stat_payload_header *fsp_head,
@@ -112,7 +117,7 @@ void dump_rx_latency_sample_diag(const char *tag,
                                  uint32_t pkt_len,
                                  hr_time_t hr_time_now) {
     uint32_t seen = counter.fetch_add(1);
-    if (seen >= 64) {
+    if (!should_dump_rx_latency_sample(seen)) {
         return;
     }
 
@@ -140,7 +145,7 @@ void dump_rx_latency_sample_diag(const char *tag,
     printf("%s sample=%u len=%u eth=0x%04x "
            "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u ip_id=0x%04x "
            "magic=0x%02x hw_id=%u flow_seq=%u seq=%u exp_seq=%u "
-           "delta_ticks=%" PRId64 "\n",
+           "delta_ticks=%" PRId64 " mbuf=%p data=%p ol_flags=0x%" PRIx64 "\n",
            tag,
            seen,
            pkt_len,
@@ -155,7 +160,10 @@ void dump_rx_latency_sample_diag(const char *tag,
            fsp_head->flow_seq,
            fsp_head->seq,
            exp_seq,
-           delta);
+           delta,
+           m,
+           pkt,
+           m->ol_flags);
 }
 
 }
