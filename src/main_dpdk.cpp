@@ -85,6 +85,7 @@ namespace {
 std::atomic<uint32_t> g_rhea_latency_tx_diag_seen(0);
 std::atomic<uint32_t> g_rhea_latency_data_enqueue_seen(0);
 std::atomic<uint32_t> g_rhea_latency_data_flush_seen(0);
+std::atomic<uint32_t> g_rhea_latency_node_decision_seen(0);
 
 struct rhea_latency_pkt_info {
     uint16_t len;
@@ -167,6 +168,59 @@ void rhea_dump_latency_data_path_diag(const char *tag,
            info.fsp[0],
            (uint16_t)info.fsp[2] | ((uint16_t)info.fsp[3] << 8),
            info.fsp[1],
+           (uint32_t)info.fsp[4] | ((uint32_t)info.fsp[5] << 8) |
+               ((uint32_t)info.fsp[6] << 16) | ((uint32_t)info.fsp[7] << 24),
+           (unsigned long)((uint64_t)info.fsp[8] | ((uint64_t)info.fsp[9] << 8) |
+               ((uint64_t)info.fsp[10] << 16) | ((uint64_t)info.fsp[11] << 24) |
+               ((uint64_t)info.fsp[12] << 32) | ((uint64_t)info.fsp[13] << 40) |
+               ((uint64_t)info.fsp[14] << 48) | ((uint64_t)info.fsp[15] << 56)),
+           (const void *)m,
+           info.pkt);
+    fflush(stdout);
+}
+
+void rhea_dump_latency_node_decision_diag(const char *tag,
+                                          CGenNodeStateless *node_sl,
+                                          uint8_t core_id,
+                                          uint8_t tx_queue_id,
+                                          uint8_t tx_queue_id_lat,
+                                          uint16_t port_id,
+                                          const rte_mbuf_t *m) {
+    rhea_latency_pkt_info info;
+    if (!rhea_get_latency_pkt_info(m, info)) {
+        return;
+    }
+
+    uint32_t seen = g_rhea_latency_node_decision_seen.fetch_add(1);
+    if (seen >= 4096 && (seen % 100000) != 0) {
+        return;
+    }
+
+    printf("%s sample=%u core=%u stream_id=%u port_id=%u node_port=%u stat_needed=%u hw_id=%u "
+           "is_tpg=%u is_ieee1588=%u cache=%u cache_array=%u stream_type=%u node_state=%u "
+           "tx_port=%u txq=%u lat_txq=%u len=%u data_len=%u src=%u.%u.%u.%u dst=%u.%u.%u.%u "
+           "seq=%u ts=%lu mbuf=%p data=%p\n",
+           tag,
+           seen,
+           core_id,
+           node_sl->get_user_stream_id(),
+           port_id,
+           node_sl->get_port_id(),
+           node_sl->is_stat_needed() ? 1 : 0,
+           node_sl->get_stat_hw_id(),
+           node_sl->is_tpg_stream() ? 1 : 0,
+           node_sl->is_latency_ieee_1588_enabled() ? 1 : 0,
+           node_sl->get_cache_mbuf() ? 1 : 0,
+           node_sl->is_cache_mbuf_array() ? 1 : 0,
+           node_sl->get_stream_type(),
+           node_sl->get_state(),
+           port_id,
+           tx_queue_id,
+           tx_queue_id_lat,
+           info.len,
+           info.data_len,
+           info.pkt[26], info.pkt[27], info.pkt[28], info.pkt[29],
+           info.pkt[30], info.pkt[31], info.pkt[32], info.pkt[33],
            (uint32_t)info.fsp[4] | ((uint32_t)info.fsp[5] << 8) |
                ((uint32_t)info.fsp[6] << 16) | ((uint32_t)info.fsp[7] << 24),
            (unsigned long)((uint64_t)info.fsp[8] | ((uint64_t)info.fsp[9] << 8) |
@@ -2490,8 +2544,22 @@ HOT_FUNC int CCoreEthIFStateless::send_node_flow_stat(rte_mbuf *m, CGenNodeState
                                              , CVirtualIFPerSideStats  * lp_stats) {
     uint16_t hw_id = node_sl->get_stat_hw_id();
     if (hw_id >= MAX_FLOW_STATS || node_sl->is_tpg_stream()) {
+        rhea_dump_latency_node_decision_diag("rhea-e810-node-lat-send",
+                                             node_sl,
+                                             m_core_id,
+                                             lp_port->m_tx_queue_id,
+                                             lp_port->m_tx_queue_id_lat,
+                                             lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
+                                             m);
         send_pkt_lat(lp_port, node_sl, m, lp_stats);
     } else {
+        rhea_dump_latency_node_decision_diag("rhea-e810-node-stat-data-send",
+                                             node_sl,
+                                             m_core_id,
+                                             lp_port->m_tx_queue_id,
+                                             lp_port->m_tx_queue_id_lat,
+                                             lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
+                                             m);
         send_pkt(lp_port, m, lp_stats);
     }
     return 0;
@@ -2533,6 +2601,13 @@ CCoreEthIFStateless::send_node_packet(CGenNodeStateless      *node_sl,
     if (unlikely(node_sl->is_stat_needed())) {
         return send_node_flow_stat(m, node_sl, lp_port, lp_stats);
     } else {
+        rhea_dump_latency_node_decision_diag("rhea-e810-node-normal-send",
+                                             node_sl,
+                                             m_core_id,
+                                             lp_port->m_tx_queue_id,
+                                             lp_port->m_tx_queue_id_lat,
+                                             lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
+                                             m);
         return send_pkt(lp_port, m, lp_stats);
     }
 }
