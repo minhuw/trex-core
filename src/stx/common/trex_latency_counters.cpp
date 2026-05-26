@@ -438,6 +438,12 @@ bool RXLatency::handle_flow_latency_stats(const rte_mbuf_t *m, uint32_t& ip_id,b
             hr_time_now = os_get_hr_tick_64();
             readtime = true;
         }
+        bool ts_valid = fsp_head->is_valid_ts(hr_time_now);
+        if (unlikely((fsp_head->magic != FLOW_STAT_PAYLOAD_MAGIC) ||
+                     (fsp_head->hw_id >= MAX_FLOW_STATS_PAYLOAD) ||
+                     !ts_valid)) {
+            return false;
+        }
         update_stats_for_pkt(fsp_head, m->pkt_len, hr_time_now);
         return true;
     }
@@ -459,14 +465,13 @@ void RXLatency::handle_pkt(const rte_mbuf_t *m, int port) {
     uint32_t ip_id = 0;
     parser.get_ip_id(ip_id);
 
-    // in case of software mode, give priorty to meta-data checked 
-    if (m_rcv_all) {
-        if ( handle_flow_latency_stats(m, ip_id,true) ) {
-            return;
-        }
-    }
     // valid IP 
     if (res == FSTAT_PARSER_E_OK){
+        bool allow_flow_stat = !m_rcv_all || parser.has_tos_to_cpu();
+        if (!allow_flow_stat) {
+            return;
+        }
+
         if (is_flow_stat_id(ip_id)) {
             if (is_flow_stat_payload_id(ip_id)) {
                 if (unlikely( (m->ol_flags & RTE_MBUF_F_RX_IEEE1588_TMST) || (m_is_ieee_ref_cnt_set == true) )) {
@@ -477,7 +482,20 @@ void RXLatency::handle_pkt(const rte_mbuf_t *m, int port) {
             } else {
                 update_flow_stats(m, ip_id);
             }
+        } else if (m_rcv_all) {
+            /* In software/pass-all mode the RX core sees ordinary data traffic
+             * that hardware filters would have discarded. Only apply the
+             * payload-magic fallback to valid IP packets explicitly marked by
+             * TRex for the RX core; non-IP/proxy packets keep the unrestricted
+             * fallback below.
+             */
+            handle_flow_latency_stats(m, ip_id,true);
         }
+        return;
+    }
+
+    if (m_rcv_all) {
+        handle_flow_latency_stats(m, ip_id,true);
     }
 
 }
@@ -604,10 +622,13 @@ RXLatency::handle_correct_flow(
         CRFC2544Info *curr_rfc2544,
         uint32_t pkt_len,
         hr_time_t hr_time_now) {
-    check_seq_number_and_update_stats(fsp_head, curr_rfc2544);
+    bool update_latency = check_seq_number_and_update_stats(fsp_head, curr_rfc2544);
     uint16_t hw_id = fsp_head->hw_id;
     m_rx_pg_stat_payload[hw_id].add_pkts(1);
     m_rx_pg_stat_payload[hw_id].add_bytes(pkt_len + 4); // +4 for ethernet CRC
+    if (!update_latency) {
+        return;
+    }
     uint64_t d = (hr_time_now - fsp_head->time_stamp );
     dsec_t ctime = ptime_convert_hr_dsec(d);
     curr_rfc2544->add_sample(ctime);
@@ -619,12 +640,12 @@ RXLatency::handle_correct_flow_ieee_1588(
         CRFC2544Info *curr_rfc2544,
         uint32_t pkt_len,
         hr_time_t hr_time_now) {
-    check_seq_number_and_update_stats_ieee_1588(fsp_head, curr_rfc2544);
+    bool update_latency = check_seq_number_and_update_stats_ieee_1588(fsp_head, curr_rfc2544);
     uint16_t hw_id = fsp_head->fsp_hdr.hw_id;
     m_rx_pg_stat_payload[hw_id].add_pkts(1);
     m_rx_pg_stat_payload[hw_id].add_bytes(pkt_len + 4); // +4 for ethernet CRC
 
-    if (fsp_head->ptp_message.hdr.msg_type == FOLLOW_UP ) {
+    if (fsp_head->ptp_message.hdr.msg_type == FOLLOW_UP && update_latency) {
         uint64_t d = (hr_time_now - fsp_head->fsp_hdr.time_stamp );
         if (d > NSEC_PER_SEC) {
             /*
@@ -649,7 +670,7 @@ RXLatency::handle_correct_flow_ieee_1588(
     }
 }
 
-void
+bool
 RXLatency::check_seq_number_and_update_stats(
         flow_stat_payload_header *fsp_head,
         CRFC2544Info *curr_rfc2544) {
@@ -659,6 +680,7 @@ RXLatency::check_seq_number_and_update_stats(
         if ((int32_t)(pkt_seq - exp_seq) < 0) {
             handle_seq_number_smaller_than_expected(
                 curr_rfc2544, pkt_seq, exp_seq);
+            return false;
         } else {
             handle_seq_number_bigger_than_expected(
                 curr_rfc2544, pkt_seq, exp_seq);
@@ -669,9 +691,10 @@ RXLatency::check_seq_number_and_update_stats(
             curr_rfc2544->check_seqblks();
         }
     }
+    return true;
 }
 
-void
+bool
 RXLatency::check_seq_number_and_update_stats_ieee_1588(
         flow_stat_payload_header_ieee_1588 *fsp_head,
         CRFC2544Info *curr_rfc2544) {
@@ -681,6 +704,7 @@ RXLatency::check_seq_number_and_update_stats_ieee_1588(
         if ((int32_t)(pkt_seq - exp_seq) < 0) {
             handle_seq_number_smaller_than_expected(
                 curr_rfc2544, pkt_seq, exp_seq);
+            return false;
         } else {
             handle_seq_number_bigger_than_expected(
                 curr_rfc2544, pkt_seq, exp_seq);
@@ -693,6 +717,7 @@ RXLatency::check_seq_number_and_update_stats_ieee_1588(
             }
         }
     }
+    return true;
 }
 
 void

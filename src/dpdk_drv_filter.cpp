@@ -24,6 +24,12 @@
 
 
 #define MAX_PATTERN_NUM 5
+#define TREX_INTEL_FLOW_PRIORITY_HIGHEST 0
+#define TREX_INTEL_FLOW_PRIORITY_LOW 1
+
+static bool filter_hw_mode_is_intel(dpdk_filter_hw_nic_t hw_mode) {
+    return (hw_mode == fhtINTEL_NO_DOT1Q) || (hw_mode == fhtINTEL_DOT1Q);
+}
 
 static struct rte_flow * filter_tos_flow_to_rq(uint8_t port_id,
                                                uint8_t rx_q,
@@ -56,6 +62,9 @@ static struct rte_flow * filter_tos_flow_to_rq(uint8_t port_id,
 	 */
 	memset(&attr, 0, sizeof(struct rte_flow_attr));
 	attr.ingress = 1;
+    if (filter_hw_mode_is_intel(hw_mode)) {
+        attr.priority = TREX_INTEL_FLOW_PRIORITY_HIGHEST;
+    }
 
 	/*
 	 * create the action sequence.
@@ -77,7 +86,6 @@ static struct rte_flow * filter_tos_flow_to_rq(uint8_t port_id,
     eth_spec.type = 0;
     eth_mask.type = 0;
 
-    
 	pattern[pattern_index].type = RTE_FLOW_ITEM_TYPE_ETH;
 	pattern[pattern_index].spec = &eth_spec;
 	pattern[pattern_index].mask = &eth_mask;
@@ -102,8 +110,13 @@ static struct rte_flow * filter_tos_flow_to_rq(uint8_t port_id,
     if (ipv6){
         memset(&ipv6_spec, 0, sizeof(struct rte_flow_item_ipv6));
         memset(&ipv6_mask, 0, sizeof(struct rte_flow_item_ipv6));
-        ipv6_spec.hdr.vtc_flow = PAL_NTOHL(0x1<<20);
-        ipv6_mask.hdr.vtc_flow = PAL_NTOHL(0x1<<20);
+        if (filter_hw_mode_is_intel(hw_mode)) {
+            ipv6_spec.hdr.vtc_flow = rte_cpu_to_be_32(TOS_GO_TO_CPU << 20);
+            ipv6_mask.hdr.vtc_flow = rte_cpu_to_be_32(0xff << 20);
+        } else {
+            ipv6_spec.hdr.vtc_flow = PAL_NTOHL(TOS_GO_TO_CPU << 20);
+            ipv6_mask.hdr.vtc_flow = PAL_NTOHL(TOS_GO_TO_CPU << 20);
+        }
         pattern[pattern_index].type = RTE_FLOW_ITEM_TYPE_IPV6;
         pattern[pattern_index].spec = &ipv6_spec;
         pattern[pattern_index].mask = &ipv6_mask;
@@ -116,8 +129,8 @@ static struct rte_flow * filter_tos_flow_to_rq(uint8_t port_id,
          */
         memset(&ipv4_spec, 0, sizeof(struct rte_flow_item_ipv4));
         memset(&ipv4_mask, 0, sizeof(struct rte_flow_item_ipv4));
-        ipv4_spec.hdr.type_of_service = 0x01;
-        ipv4_mask.hdr.type_of_service = 0x01; 
+        ipv4_spec.hdr.type_of_service = TOS_GO_TO_CPU;
+        ipv4_mask.hdr.type_of_service = filter_hw_mode_is_intel(hw_mode) ? 0xff : TOS_GO_TO_CPU;
         pattern[pattern_index].type = RTE_FLOW_ITEM_TYPE_IPV4;
         pattern[pattern_index].spec = &ipv4_spec;
         pattern[pattern_index].mask = &ipv4_mask;
@@ -143,6 +156,9 @@ static struct rte_flow * filter_drop_all(uint8_t port_id,
 	struct rte_flow *flow = NULL;
 	struct rte_flow_item_eth eth_spec;
 	struct rte_flow_item_eth eth_mask;
+	struct rte_flow_item_any any_spec;
+	struct rte_flow_item_any any_mask;
+	struct rte_flow_action_queue queue = { .index = MAIN_DPDK_DROP_Q };
 
 	int res;
 
@@ -155,17 +171,27 @@ static struct rte_flow * filter_drop_all(uint8_t port_id,
 	 */
 	memset(&attr, 0, sizeof(struct rte_flow_attr));
 	attr.ingress = 1;
-    //if (hw_mode == fhtMLX){
-        //attr.group =1;  
-        //attr.priority =1;/* not supported yet*/
-    //}
+    if (filter_hw_mode_is_intel(hw_mode)) {
+        /*
+         * Intel ICE supports two rte_flow priorities. Keep TRex latency/control
+         * TOS rules at priority 0 and install the catch-all rule below them.
+         * ICE is routed to queue 0 instead of DROP because the DROP action
+         * appears to shadow the higher-priority TOS steering rule on E810.
+         */
+        attr.priority = TREX_INTEL_FLOW_PRIORITY_LOW;
+    }
 
 	/*
 	 * create the action sequence.
 	 * one action only,  move packet to queue
 	 */
 
-    action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+    if (filter_hw_mode_is_intel(hw_mode)) {
+        action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+        action[0].conf = &queue;
+    } else {
+        action[0].type = RTE_FLOW_ACTION_TYPE_DROP;
+    }
     action[1].type = RTE_FLOW_ACTION_TYPE_END;
 
 	/*
@@ -179,15 +205,17 @@ static struct rte_flow * filter_drop_all(uint8_t port_id,
 	    eth_spec.type = 0x0000;
 	    eth_mask.type = 0x0000;
     	pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+        pattern[0].spec = &eth_spec;
+        pattern[0].mask = &eth_mask;
     }else{
-        eth_spec.type = RTE_BE16(0x0000); 
-        eth_mask.type = RTE_BE16(0x4000);
+        memset(&any_spec, 0, sizeof(struct rte_flow_item_any));
+        memset(&any_mask, 0, sizeof(struct rte_flow_item_any));
+        any_spec.num = 0;
+        any_mask.num = 0;
     	pattern[0].type = RTE_FLOW_ITEM_TYPE_ANY;
+        pattern[0].spec = &any_spec;
+        pattern[0].mask = &any_mask;
     }
-
-
-	pattern[0].spec = &eth_spec;
-	pattern[0].mask = &eth_mask;
 
 	/* the final level must be always type end */
 	pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
@@ -392,7 +420,3 @@ CDpdkFilterPort * CDpdkFilterManager::get_port(repid_t repid){
     m_port[repid]=lp;
     return(lp);
 }
-
-
-
-

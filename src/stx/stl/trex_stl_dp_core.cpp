@@ -1988,6 +1988,3 @@ void CGenNodePCAP::destroy() {
 
     m_state = PCAP_INVALID;
 }
-
-
-

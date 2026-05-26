@@ -386,6 +386,16 @@ uint8_t CFlowStatParser::get_ttl(){
     return (0);
 }
 
+bool CFlowStatParser::has_tos_to_cpu() {
+    if (m_ipv4) {
+        return (m_ipv4->getTOS() & TOS_GO_TO_CPU) != 0;
+    }
+    if (m_ipv6) {
+        return (m_ipv6->getTrafficClass() & TOS_GO_TO_CPU) != 0;
+    }
+    return false;
+}
+
 // calculate the payload len. Do not want to do this in parse(), since this is required only in
 // specific cases, while parse is used in many places (including on packet RX path, where we want to be as fast as possible)
 int CFlowStatParser::get_payload_len(uint8_t *p, uint16_t len, uint16_t &payload_len) {

@@ -73,7 +73,14 @@ void CTRexExtendedDriverIce::update_configuration(port_cfg_t * cfg){
     cfg->m_port_conf.fdir_conf.pballoc = RTE_ETH_FDIR_PBALLOC_64K;
     cfg->m_port_conf.fdir_conf.status = RTE_FDIR_NO_REPORT_STATUS;
     cfg->m_port_conf.rxmode.offloads = 0;
-    cfg->tx_offloads.common_required = RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+    /*
+     * TRex stateless streams can keep immutable packets as cached mbufs and
+     * transmit them by bumping the mbuf refcount. The ice PMD implements
+     * MBUF_FAST_FREE by returning completed TX mbufs directly to the mempool,
+     * bypassing refcount checks. That corrupts cached stream packets when a
+     * later allocation reuses the same mbuf.
+     */
+    cfg->tx_offloads.common_required &= ~RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 }
 
 void CTRexExtendedDriverIce::reset_rx_stats(CPhyEthIF * _if, uint32_t *stats, int min, int len) {
@@ -114,4 +121,3 @@ void CTRexExtendedDriverIce::get_rx_stat_capabilities(uint16_t &flags, uint16_t 
     num_counters = 127; //With MAX_FLOW_STATS we saw packet failures in rx_test. Need to check.
     base_ip_id = IP_ID_RESERVE_BASE;
 }
-

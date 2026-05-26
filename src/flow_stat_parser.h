@@ -83,6 +83,7 @@ class CFlowStatParser {
     virtual int get_payload_len(uint8_t *p, uint16_t len, uint16_t &payload_len);
     virtual uint16_t get_pkt_size();
     virtual uint8_t get_ttl();
+    virtual bool has_tos_to_cpu();
     bool is_fs_latency(rte_mbuf_t *m);
     /**
      * Is pkt a Tagged Packet Group packet?
