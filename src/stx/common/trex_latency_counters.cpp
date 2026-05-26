@@ -106,6 +106,7 @@ void dump_rx_latency_reject_diag(const rte_mbuf_t *m,
 
 void dump_rx_latency_sample_diag(const char *tag,
                                  std::atomic<uint32_t> &counter,
+                                 const rte_mbuf_t *m,
                                  struct flow_stat_payload_header *fsp_head,
                                  uint32_t exp_seq,
                                  uint32_t pkt_len,
@@ -116,12 +117,40 @@ void dump_rx_latency_sample_diag(const char *tag,
     }
 
     int64_t delta = hr_time_now - fsp_head->time_stamp;
+    uint8_t *pkt = rte_pktmbuf_mtod(m, uint8_t *);
+    uint16_t len = rte_pktmbuf_pkt_len(m);
+    uint16_t eth_type = 0;
+    uint8_t tos = 0;
+    uint8_t proto = 0;
+    uint16_t ip_id = 0;
+    uint8_t src[4] = {0, 0, 0, 0};
+    uint8_t dst[4] = {0, 0, 0, 0};
 
-    printf("%s sample=%u len=%u hw_id=%u flow_seq=%u seq=%u exp_seq=%u "
+    if (len >= 34) {
+        eth_type = (uint16_t(pkt[12]) << 8) | pkt[13];
+        if (eth_type == EthernetHeader::Protocol::IP) {
+            tos = pkt[15];
+            ip_id = (uint16_t(pkt[18]) << 8) | pkt[19];
+            proto = pkt[23];
+            memcpy(src, pkt + 26, sizeof(src));
+            memcpy(dst, pkt + 30, sizeof(dst));
+        }
+    }
+
+    printf("%s sample=%u len=%u eth=0x%04x "
+           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u ip_id=0x%04x "
+           "magic=0x%02x hw_id=%u flow_seq=%u seq=%u exp_seq=%u "
            "delta_ticks=%" PRId64 "\n",
            tag,
            seen,
            pkt_len,
+           eth_type,
+           src[0], src[1], src[2], src[3],
+           dst[0], dst[1], dst[2], dst[3],
+           tos,
+           proto,
+           ip_id,
+           fsp_head->magic,
            fsp_head->hw_id,
            fsp_head->flow_seq,
            fsp_head->seq,
@@ -578,7 +607,7 @@ bool RXLatency::handle_flow_latency_stats(const rte_mbuf_t *m, uint32_t& ip_id,b
         if (unlikely(m_rcv_all)) {
             dump_rx_latency_diag(m, ip_id, fsp_head, ts_valid);
         }
-        update_stats_for_pkt(fsp_head, m->pkt_len, hr_time_now);
+        update_stats_for_pkt(fsp_head, m, m->pkt_len, hr_time_now);
         return true;
     }
     return false;
@@ -637,6 +666,7 @@ void RXLatency::handle_pkt(const rte_mbuf_t *m, int port) {
 void
 RXLatency::update_stats_for_pkt(
         flow_stat_payload_header *fsp_head,
+        const rte_mbuf_t *m,
         uint32_t pkt_len,
         hr_time_t hr_time_now) {
     uint16_t hw_id = fsp_head->hw_id;
@@ -658,7 +688,7 @@ RXLatency::update_stats_for_pkt(
         }
 
         if (good_packet) {
-            handle_correct_flow(fsp_head, curr_rfc2544, pkt_len, hr_time_now);
+            handle_correct_flow(fsp_head, m, curr_rfc2544, pkt_len, hr_time_now);
         }
     }
 }
@@ -753,6 +783,7 @@ RXLatency::handle_unexpected_flow_ieee_1588(
 void
 RXLatency::handle_correct_flow(
         flow_stat_payload_header *fsp_head,
+        const rte_mbuf_t *m,
         CRFC2544Info *curr_rfc2544,
         uint32_t pkt_len,
         hr_time_t hr_time_now) {
@@ -764,6 +795,7 @@ RXLatency::handle_correct_flow(
     if (!update_latency) {
         dump_rx_latency_sample_diag("rhea-e810-lat-skip",
                                     g_rx_latency_skip_seen,
+                                    m,
                                     fsp_head,
                                     exp_seq,
                                     pkt_len,
@@ -772,6 +804,7 @@ RXLatency::handle_correct_flow(
     }
     dump_rx_latency_sample_diag("rhea-e810-lat-accept",
                                 g_rx_latency_accept_seen,
+                                m,
                                 fsp_head,
                                 exp_seq,
                                 pkt_len,
