@@ -32,81 +32,6 @@ limitations under the License.
 #include "utl_mbuf.h"
 #include "hot_section.h"
 
-#include <atomic>
-
-namespace {
-
-std::atomic<uint32_t> g_rhea_latency_dp_rx_diag_seen(0);
-
-void rhea_dump_latency_dp_rx_diag(uint8_t thread_id,
-                                  int dir,
-                                  bool is_idle,
-                                  bool parser_ok,
-                                  bool fs_latency,
-                                  const rte_mbuf_t *m) {
-    if (!fs_latency) {
-        return;
-    }
-
-    uint32_t seen = g_rhea_latency_dp_rx_diag_seen.fetch_add(1);
-    if (seen >= 128) {
-        return;
-    }
-
-    const uint8_t *pkt = rte_pktmbuf_mtod(m, const uint8_t *);
-    uint16_t len = rte_pktmbuf_pkt_len(m);
-    uint16_t data_len = rte_pktmbuf_data_len(m);
-    uint16_t eth_type = 0;
-    uint8_t tos = 0;
-    uint8_t proto = 0;
-    uint16_t ip_id = 0;
-    uint8_t src[4] = {0, 0, 0, 0};
-    uint8_t dst[4] = {0, 0, 0, 0};
-    const struct flow_stat_payload_header *fsp_head = nullptr;
-
-    if (len >= 34) {
-        eth_type = (uint16_t(pkt[12]) << 8) | pkt[13];
-        if (eth_type == EthernetHeader::Protocol::IP) {
-            tos = pkt[15];
-            ip_id = (uint16_t(pkt[18]) << 8) | pkt[19];
-            proto = pkt[23];
-            memcpy(src, pkt + 26, sizeof(src));
-            memcpy(dst, pkt + 30, sizeof(dst));
-        }
-    }
-
-    if (data_len >= sizeof(struct flow_stat_payload_header)) {
-        fsp_head = (const struct flow_stat_payload_header *)(pkt + data_len - sizeof(struct flow_stat_payload_header));
-    }
-
-    printf("rhea-e810-lat-dp-rx sample=%u thread=%u dir=%d idle=%u parser_ok=%u len=%u data_len=%u "
-           "eth=0x%04x src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x proto=%u ip_id=0x%04x "
-           "magic=0x%02x hw_id=%u flow_seq=%u seq=%u ts=%lu mbuf=%p data=%p\n",
-           seen,
-           thread_id,
-           dir,
-           is_idle ? 1 : 0,
-           parser_ok ? 1 : 0,
-           len,
-           data_len,
-           eth_type,
-           src[0], src[1], src[2], src[3],
-           dst[0], dst[1], dst[2], dst[3],
-           tos,
-           proto,
-           ip_id,
-           fsp_head ? fsp_head->magic : 0,
-           fsp_head ? fsp_head->hw_id : 0,
-           fsp_head ? fsp_head->flow_seq : 0,
-           fsp_head ? fsp_head->seq : 0,
-           fsp_head ? (unsigned long)fsp_head->time_stamp : 0,
-           (const void *)m,
-           pkt);
-    fflush(stdout);
-}
-
-}
-
 /* return true if packet passed through service filter */
 COLD_FUNC bool TrexStatelessDpCore::check_service_filter(bool &drop) {
     
@@ -198,7 +123,6 @@ COLD_FUNC void TrexStatelessDpCore::_rx_handle_packet(int dir,
     bool tcp_udp=false;
 
     if (m_parser->is_fs_latency(m)) {
-        rhea_dump_latency_dp_rx_diag(m_thread_id, dir, is_idle, true, true, m);
         m_ports[dir].m_fs_latency.handle_pkt(m,0);
     }
 
@@ -2064,5 +1988,3 @@ void CGenNodePCAP::destroy() {
 
     m_state = PCAP_INVALID;
 }
-
-

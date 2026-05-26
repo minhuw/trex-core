@@ -141,7 +141,6 @@ public:
     bool handle_flow_latency_stats_ieee_1588(const rte_mbuf_t *m, uint32_t& ip_id, int port);
     void update_flow_stats(const rte_mbuf_t *m, uint32_t ip_id);
     void update_stats_for_pkt(flow_stat_payload_header *fsp_head,
-                              const rte_mbuf_t *m,
                               uint32_t pkt_len,
                               hr_time_t hr_time_now);
     void update_stats_for_pkt_ieee_1588(flow_stat_payload_header_ieee_1588 *fsp_head,
@@ -190,7 +189,6 @@ private:
         CRFC2544Info *curr_rfc2544);
     void handle_correct_flow(
         flow_stat_payload_header *fsp_head,
-        const rte_mbuf_t *m,
         CRFC2544Info *curr_rfc2544,
         uint32_t pkt_len,
         hr_time_t hr_time_now);

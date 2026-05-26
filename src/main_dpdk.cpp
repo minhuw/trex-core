@@ -26,7 +26,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <zmq.h>
-#include <atomic>
 #include <sys/time.h>
 #include <rte_config.h>
 #include <rte_common.h>
@@ -79,226 +78,6 @@ extern "C" {
 /* stateless */
 #include "stl/trex_stl.h"
 #include "stl/trex_stl_stream_node.h"
-
-namespace {
-
-std::atomic<uint32_t> g_rhea_latency_tx_diag_seen(0);
-std::atomic<uint32_t> g_rhea_latency_data_enqueue_seen(0);
-std::atomic<uint32_t> g_rhea_latency_data_flush_seen(0);
-std::atomic<uint32_t> g_rhea_latency_node_decision_seen(0);
-
-struct rhea_latency_pkt_info {
-    uint16_t len;
-    uint16_t data_len;
-    uint16_t eth_type;
-    uint16_t ip_id;
-    uint8_t tos;
-    uint8_t ttl;
-    uint8_t proto;
-    const uint8_t *pkt;
-    const uint8_t *fsp;
-};
-
-bool rhea_get_latency_pkt_info(const rte_mbuf_t *m, rhea_latency_pkt_info &info) {
-    info.len = rte_pktmbuf_pkt_len(m);
-    info.data_len = rte_pktmbuf_data_len(m);
-    if (info.len < 50 || info.data_len < info.len) {
-        return false;
-    }
-
-    info.pkt = rte_pktmbuf_mtod(m, const uint8_t *);
-    info.eth_type = ((uint16_t)info.pkt[12] << 8) | info.pkt[13];
-    if (info.eth_type != EthernetHeader::Protocol::IP) {
-        return false;
-    }
-
-    info.tos = info.pkt[15];
-    info.ip_id = ((uint16_t)info.pkt[18] << 8) | info.pkt[19];
-    info.ttl = info.pkt[22];
-    info.proto = info.pkt[23];
-    info.fsp = info.pkt + info.len - sizeof(struct flow_stat_payload_header);
-    if (info.tos != 0x01 || info.ip_id != 0xffff || info.fsp[0] != FLOW_STAT_PAYLOAD_MAGIC) {
-        return false;
-    }
-
-    return true;
-}
-
-void rhea_dump_latency_data_path_diag(const char *tag,
-                                      std::atomic<uint32_t> &seen_ctr,
-                                      uint8_t core_id,
-                                      uint8_t tx_queue_id,
-                                      uint8_t tx_queue_id_lat,
-                                      uint16_t port_id,
-                                      uint16_t idx,
-                                      uint16_t burst_len,
-                                      const rte_mbuf_t *m) {
-    rhea_latency_pkt_info info;
-    if (!rhea_get_latency_pkt_info(m, info)) {
-        return;
-    }
-
-    uint32_t seen = seen_ctr.fetch_add(1);
-    if (seen >= 4096 && (seen % 100000) != 0) {
-        return;
-    }
-
-    printf("%s sample=%u core=%u port=%u txq=%u lat_txq=%u idx=%u burst=%u len=%u data_len=%u "
-           "eth_src=%02x:%02x:%02x:%02x:%02x:%02x eth_dst=%02x:%02x:%02x:%02x:%02x:%02x "
-           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x ttl=%u proto=%u ip_id=0x%04x "
-           "magic=0x%02x hw_id=%u flow_seq=%u seq=%u ts=%lu mbuf=%p data=%p\n",
-           tag,
-           seen,
-           core_id,
-           port_id,
-           tx_queue_id,
-           tx_queue_id_lat,
-           idx,
-           burst_len,
-           info.len,
-           info.data_len,
-           info.pkt[6], info.pkt[7], info.pkt[8], info.pkt[9], info.pkt[10], info.pkt[11],
-           info.pkt[0], info.pkt[1], info.pkt[2], info.pkt[3], info.pkt[4], info.pkt[5],
-           info.pkt[26], info.pkt[27], info.pkt[28], info.pkt[29],
-           info.pkt[30], info.pkt[31], info.pkt[32], info.pkt[33],
-           info.tos,
-           info.ttl,
-           info.proto,
-           info.ip_id,
-           info.fsp[0],
-           (uint16_t)info.fsp[2] | ((uint16_t)info.fsp[3] << 8),
-           info.fsp[1],
-           (uint32_t)info.fsp[4] | ((uint32_t)info.fsp[5] << 8) |
-               ((uint32_t)info.fsp[6] << 16) | ((uint32_t)info.fsp[7] << 24),
-           (unsigned long)((uint64_t)info.fsp[8] | ((uint64_t)info.fsp[9] << 8) |
-               ((uint64_t)info.fsp[10] << 16) | ((uint64_t)info.fsp[11] << 24) |
-               ((uint64_t)info.fsp[12] << 32) | ((uint64_t)info.fsp[13] << 40) |
-               ((uint64_t)info.fsp[14] << 48) | ((uint64_t)info.fsp[15] << 56)),
-           (const void *)m,
-           info.pkt);
-    fflush(stdout);
-}
-
-void rhea_dump_latency_node_decision_diag(const char *tag,
-                                          CGenNodeStateless *node_sl,
-                                          uint8_t core_id,
-                                          uint8_t tx_queue_id,
-                                          uint8_t tx_queue_id_lat,
-                                          uint16_t port_id,
-                                          const rte_mbuf_t *m) {
-    rhea_latency_pkt_info info;
-    if (!rhea_get_latency_pkt_info(m, info)) {
-        return;
-    }
-
-    uint32_t seen = g_rhea_latency_node_decision_seen.fetch_add(1);
-    if (seen >= 4096 && (seen % 100000) != 0) {
-        return;
-    }
-
-    printf("%s sample=%u core=%u stream_id=%u port_id=%u node_port=%u stat_needed=%u hw_id=%u "
-           "is_tpg=%u is_ieee1588=%u cache=%u cache_array=%u stream_type=%u node_state=%u "
-           "tx_port=%u txq=%u lat_txq=%u len=%u data_len=%u src=%u.%u.%u.%u dst=%u.%u.%u.%u "
-           "seq=%u ts=%lu mbuf=%p data=%p\n",
-           tag,
-           seen,
-           core_id,
-           node_sl->get_user_stream_id(),
-           port_id,
-           node_sl->get_port_id(),
-           node_sl->is_stat_needed() ? 1 : 0,
-           node_sl->get_stat_hw_id(),
-           node_sl->is_tpg_stream() ? 1 : 0,
-           node_sl->is_latency_ieee_1588_enabled() ? 1 : 0,
-           node_sl->get_cache_mbuf() ? 1 : 0,
-           node_sl->is_cache_mbuf_array() ? 1 : 0,
-           node_sl->get_stream_type(),
-           node_sl->get_state(),
-           port_id,
-           tx_queue_id,
-           tx_queue_id_lat,
-           info.len,
-           info.data_len,
-           info.pkt[26], info.pkt[27], info.pkt[28], info.pkt[29],
-           info.pkt[30], info.pkt[31], info.pkt[32], info.pkt[33],
-           (uint32_t)info.fsp[4] | ((uint32_t)info.fsp[5] << 8) |
-               ((uint32_t)info.fsp[6] << 16) | ((uint32_t)info.fsp[7] << 24),
-           (unsigned long)((uint64_t)info.fsp[8] | ((uint64_t)info.fsp[9] << 8) |
-               ((uint64_t)info.fsp[10] << 16) | ((uint64_t)info.fsp[11] << 24) |
-               ((uint64_t)info.fsp[12] << 32) | ((uint64_t)info.fsp[13] << 40) |
-               ((uint64_t)info.fsp[14] << 48) | ((uint64_t)info.fsp[15] << 56)),
-           (const void *)m,
-           info.pkt);
-    fflush(stdout);
-}
-
-void rhea_dump_latency_tx_diag(uint8_t core_id,
-                               uint8_t tx_queue_id,
-                               uint8_t tx_queue_id_lat,
-                               uint16_t port_id,
-                               const rte_mbuf_t *m,
-                               const struct flow_stat_payload_header *fsp_head) {
-    uint32_t seen = g_rhea_latency_tx_diag_seen.fetch_add(1);
-    if (seen >= 128) {
-        return;
-    }
-
-    const uint8_t *pkt = rte_pktmbuf_mtod(m, const uint8_t *);
-    uint16_t len = rte_pktmbuf_pkt_len(m);
-    uint16_t eth_type = 0;
-    uint8_t tos = 0;
-    uint8_t ttl = 0;
-    uint8_t proto = 0;
-    uint16_t ip_id = 0;
-    uint8_t eth_src[6] = {0, 0, 0, 0, 0, 0};
-    uint8_t eth_dst[6] = {0, 0, 0, 0, 0, 0};
-    uint8_t src[4] = {0, 0, 0, 0};
-    uint8_t dst[4] = {0, 0, 0, 0};
-
-    if (len >= 34) {
-        memcpy(eth_dst, pkt, sizeof(eth_dst));
-        memcpy(eth_src, pkt + 6, sizeof(eth_src));
-        eth_type = (uint16_t(pkt[12]) << 8) | pkt[13];
-        if (eth_type == EthernetHeader::Protocol::IP) {
-            tos = pkt[15];
-            ip_id = (uint16_t(pkt[18]) << 8) | pkt[19];
-            ttl = pkt[22];
-            proto = pkt[23];
-            memcpy(src, pkt + 26, sizeof(src));
-            memcpy(dst, pkt + 30, sizeof(dst));
-        }
-    }
-
-    printf("rhea-e810-lat-tx sample=%u core=%u port=%u txq=%u lat_txq=%u len=%u eth=0x%04x "
-           "eth_src=%02x:%02x:%02x:%02x:%02x:%02x eth_dst=%02x:%02x:%02x:%02x:%02x:%02x "
-           "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x ttl=%u proto=%u ip_id=0x%04x "
-           "magic=0x%02x hw_id=%u flow_seq=%u seq=%u ts=%lu mbuf=%p data=%p\n",
-           seen,
-           core_id,
-           port_id,
-           tx_queue_id,
-           tx_queue_id_lat,
-           len,
-           eth_type,
-           eth_src[0], eth_src[1], eth_src[2], eth_src[3], eth_src[4], eth_src[5],
-           eth_dst[0], eth_dst[1], eth_dst[2], eth_dst[3], eth_dst[4], eth_dst[5],
-           src[0], src[1], src[2], src[3],
-           dst[0], dst[1], dst[2], dst[3],
-           tos,
-           ttl,
-           proto,
-           ip_id,
-           fsp_head ? fsp_head->magic : 0,
-           fsp_head ? fsp_head->hw_id : 0,
-           fsp_head ? fsp_head->flow_seq : 0,
-           fsp_head ? fsp_head->seq : 0,
-           fsp_head ? (unsigned long)fsp_head->time_stamp : 0,
-           (const void *)m,
-           pkt);
-    fflush(stdout);
-}
-
-}
 
 /* stateful */
 #include "stf/trex_stf.h"
@@ -2193,18 +1972,6 @@ HOT_FUNC int  CCoreEthIF::send_burst(CCorePerPort * lp_port,
                            uint16_t len,
                            CVirtualIFPerSideStats  * lp_stats){
 
-    for (uint16_t i = 0; i < len; i++) {
-        rhea_dump_latency_data_path_diag("rhea-e810-data-flush",
-                                         g_rhea_latency_data_flush_seen,
-                                         m_core_id,
-                                         lp_port->m_tx_queue_id,
-                                         lp_port->m_tx_queue_id_lat,
-                                         lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
-                                         i,
-                                         len,
-                                         lp_port->m_table[i]);
-    }
-
     uint16_t ret = lp_port->m_port->tx_burst(lp_port->m_tx_queue_id,lp_port->m_table,len);
     if (likely( CGlobalInfo::m_options.m_is_queuefull_retry )) {
         while ( unlikely( ret<len ) ){
@@ -2238,15 +2005,6 @@ int HOT_FUNC CCoreEthIF::send_pkt(CCorePerPort * lp_port,
 
     uint16_t len = lp_port->m_len;
     lp_port->m_table[len]=m;
-    rhea_dump_latency_data_path_diag("rhea-e810-data-enqueue",
-                                     g_rhea_latency_data_enqueue_seen,
-                                     m_core_id,
-                                     lp_port->m_tx_queue_id,
-                                     lp_port->m_tx_queue_id_lat,
-                                     lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
-                                     len,
-                                     len + 1,
-                                     m);
     len++;
 
     /* enough pkts to be sent */
@@ -2529,12 +2287,6 @@ HOT_FUNC rte_mbuf* CCoreEthIFStateless::update_node_flow_stat(rte_mbuf *m, CGenN
     } else {
         if (hw_id >= MAX_FLOW_STATS) {
             fsp_head->time_stamp = os_get_hr_tick_64();
-            rhea_dump_latency_tx_diag(m_core_id,
-                                      lp_port->m_tx_queue_id,
-                                      lp_port->m_tx_queue_id_lat,
-                                      lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
-                                      mi,
-                                      fsp_head);
         }
     }
     return mi;
@@ -2544,22 +2296,8 @@ HOT_FUNC int CCoreEthIFStateless::send_node_flow_stat(rte_mbuf *m, CGenNodeState
                                              , CVirtualIFPerSideStats  * lp_stats) {
     uint16_t hw_id = node_sl->get_stat_hw_id();
     if (hw_id >= MAX_FLOW_STATS || node_sl->is_tpg_stream()) {
-        rhea_dump_latency_node_decision_diag("rhea-e810-node-lat-send",
-                                             node_sl,
-                                             m_core_id,
-                                             lp_port->m_tx_queue_id,
-                                             lp_port->m_tx_queue_id_lat,
-                                             lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
-                                             m);
         send_pkt_lat(lp_port, node_sl, m, lp_stats);
     } else {
-        rhea_dump_latency_node_decision_diag("rhea-e810-node-stat-data-send",
-                                             node_sl,
-                                             m_core_id,
-                                             lp_port->m_tx_queue_id,
-                                             lp_port->m_tx_queue_id_lat,
-                                             lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
-                                             m);
         send_pkt(lp_port, m, lp_stats);
     }
     return 0;
@@ -2601,13 +2339,6 @@ CCoreEthIFStateless::send_node_packet(CGenNodeStateless      *node_sl,
     if (unlikely(node_sl->is_stat_needed())) {
         return send_node_flow_stat(m, node_sl, lp_port, lp_stats);
     } else {
-        rhea_dump_latency_node_decision_diag("rhea-e810-node-normal-send",
-                                             node_sl,
-                                             m_core_id,
-                                             lp_port->m_tx_queue_id,
-                                             lp_port->m_tx_queue_id_lat,
-                                             lp_port->m_port ? lp_port->m_port->get_tvpid() : 0xffff,
-                                             m);
         return send_pkt(lp_port, m, lp_stats);
     }
 }

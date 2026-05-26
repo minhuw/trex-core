@@ -324,16 +324,12 @@ void CDpdkFilterPort::set_tos_filter(bool enable){
                                               m_hw_mode, 
                                               &error);
         check_dpdk_filter_result(m_rx_ipv4_tos,&error);
-        printf("rhea-e810-flow tos ipv4 port=%u rx_q=%u hw_mode=%u flow=%p\n",
-               (unsigned)m_repid, (unsigned)m_rx_q, (unsigned)m_hw_mode, m_rx_ipv4_tos);
         m_rx_ipv6_tos = filter_tos_flow_to_rq(m_repid,
                                               m_rx_q,
                                               true,
                                               m_hw_mode, 
                                               &error);
         check_dpdk_filter_result(m_rx_ipv6_tos,&error);
-        printf("rhea-e810-flow tos ipv6 port=%u rx_q=%u hw_mode=%u flow=%p\n",
-               (unsigned)m_repid, (unsigned)m_rx_q, (unsigned)m_hw_mode, m_rx_ipv6_tos);
     }else{
         clear_filter(m_rx_ipv4_tos);
         clear_filter(m_rx_ipv6_tos);
@@ -345,10 +341,6 @@ void CDpdkFilterPort::set_drop_all_filter(bool enable){
     if (enable){
         m_rx_drop_all = filter_drop_all(m_repid,m_hw_mode,&error);
         check_dpdk_filter_result(m_rx_drop_all,&error);
-        printf("rhea-e810-flow catch-all port=%u hw_mode=%u action=%s flow=%p\n",
-               (unsigned)m_repid, (unsigned)m_hw_mode,
-               filter_hw_mode_is_intel(m_hw_mode) ? "queue0" : "drop",
-               m_rx_drop_all);
     }else{
         clear_filter(m_rx_drop_all);
     }

@@ -17,7 +17,6 @@
 #ifndef MAIN_DPDK_H
 #define MAIN_DPDK_H
 
-#include <stdio.h>
 #include <rte_ethdev.h>
 #include <rte_udp.h>
 #include <rte_tcp.h>
@@ -197,91 +196,11 @@ class CPhyEthIF  {
         }
     }
 
-    static inline uint16_t rhea_read_le16(const uint8_t *p) {
-        return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-    }
-
-    static inline uint32_t rhea_read_le32(const uint8_t *p) {
-        return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-               ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-    }
-
-    static inline uint64_t rhea_read_le64(const uint8_t *p) {
-        return (uint64_t)rhea_read_le32(p) |
-               ((uint64_t)rhea_read_le32(p + 4) << 32);
-    }
-
-    inline void HOT_FUNC rhea_dump_wire_latency_tx(uint16_t queue_id,
-                                                   struct rte_mbuf **tx_pkts,
-                                                   uint16_t nb_pkts) {
-        static uint32_t seen = 0;
-
-        for (uint16_t i = 0; i < nb_pkts; i++) {
-            const struct rte_mbuf *m = tx_pkts[i];
-            const uint8_t *pkt = rte_pktmbuf_mtod(m, const uint8_t *);
-            uint16_t len = rte_pktmbuf_pkt_len(m);
-            uint16_t eth_type;
-            uint8_t tos;
-            uint16_t ip_id;
-            const uint8_t *fsp;
-            uint32_t sample;
-
-            if (len < 50) {
-                continue;
-            }
-
-            eth_type = ((uint16_t)pkt[12] << 8) | pkt[13];
-            if (eth_type != EthernetHeader::Protocol::IP) {
-                continue;
-            }
-
-            tos = pkt[15];
-            ip_id = ((uint16_t)pkt[18] << 8) | pkt[19];
-            fsp = pkt + len - 16;
-            if (tos != 0x01 || ip_id != 0xffff || fsp[0] != 0xab) {
-                continue;
-            }
-
-            sample = __atomic_fetch_add(&seen, 1, __ATOMIC_RELAXED);
-            if (sample >= 4096 && (sample % 100000) != 0) {
-                continue;
-            }
-
-            printf("rhea-e810-wire-tx sample=%u phase=pre port=%u queue=%u idx=%u burst=%u len=%u "
-                   "eth_src=%02x:%02x:%02x:%02x:%02x:%02x eth_dst=%02x:%02x:%02x:%02x:%02x:%02x "
-                   "src=%u.%u.%u.%u dst=%u.%u.%u.%u tos=0x%02x ttl=%u proto=%u ip_id=0x%04x "
-                   "magic=0x%02x hw_id=%u flow_seq=%u seq=%u ts=%lu mbuf=%p data=%p\n",
-                   sample,
-                   m_tvpid,
-                   queue_id,
-                   i,
-                   nb_pkts,
-                   len,
-                   pkt[6], pkt[7], pkt[8], pkt[9], pkt[10], pkt[11],
-                   pkt[0], pkt[1], pkt[2], pkt[3], pkt[4], pkt[5],
-                   pkt[26], pkt[27], pkt[28], pkt[29],
-                   pkt[30], pkt[31], pkt[32], pkt[33],
-                   tos,
-                   pkt[22],
-                   pkt[23],
-                   ip_id,
-                   fsp[0],
-                   rhea_read_le16(fsp + 2),
-                   fsp[1],
-                   rhea_read_le32(fsp + 4),
-                   (unsigned long)rhea_read_le64(fsp + 8),
-                   (const void *)m,
-                   pkt);
-            fflush(stdout);
-        }
-    }
-
     inline uint16_t HOT_FUNC tx_burst(uint16_t queue_id, struct rte_mbuf **tx_pkts, uint16_t nb_pkts) {
         if (likely( !m_is_dummy )) {
             if (unlikely(m_dev_tx_offload_needed)) {
                 tx_burst_offload_csum(tx_pkts, nb_pkts, m_dev_tx_offload_needed);
             }
-            rhea_dump_wire_latency_tx(queue_id, tx_pkts, nb_pkts);
             return rte_eth_tx_burst(m_repid, queue_id, tx_pkts, nb_pkts);
         } else {
             for (int i=0; i<nb_pkts;i++) {
