@@ -461,6 +461,11 @@ void RXLatency::handle_pkt(const rte_mbuf_t *m, int port) {
 
     // valid IP 
     if (res == FSTAT_PARSER_E_OK){
+        bool allow_flow_stat = !m_rcv_all || parser.has_tos_to_cpu();
+        if (!allow_flow_stat) {
+            return;
+        }
+
         if (is_flow_stat_id(ip_id)) {
             if (is_flow_stat_payload_id(ip_id)) {
                 if (unlikely( (m->ol_flags & RTE_MBUF_F_RX_IEEE1588_TMST) || (m_is_ieee_ref_cnt_set == true) )) {
@@ -471,7 +476,7 @@ void RXLatency::handle_pkt(const rte_mbuf_t *m, int port) {
             } else {
                 update_flow_stats(m, ip_id);
             }
-        } else if (m_rcv_all && parser.has_tos_to_cpu()) {
+        } else if (m_rcv_all) {
             /* In software/pass-all mode the RX core sees ordinary data traffic
              * that hardware filters would have discarded. Only apply the
              * payload-magic fallback to valid IP packets explicitly marked by
