@@ -2002,6 +2002,24 @@ i40e_dev_first_queue(uint16_t idx, void **queues, int num)
 	return 1;
 }
 
+static bool
+i40e_rx_needs_trex_latency_scalar_path(struct rte_eth_dev *dev)
+{
+	struct ci_rx_queue *dropq, *latq;
+
+	if (!dev->data->scattered_rx ||
+	    dev->data->nb_rx_queues < 2 ||
+	    dev->data->dev_conf.fdir_conf.mode != RTE_FDIR_MODE_PERFECT)
+		return false;
+
+	dropq = dev->data->rx_queues[0];
+	latq = dev->data->rx_queues[1];
+	if (!dropq || !latq)
+		return false;
+
+	return dropq->nb_rx_desc == 64 && latq->nb_rx_desc > dropq->nb_rx_desc;
+}
+
 static int
 i40e_dev_rx_queue_setup_runtime(struct rte_eth_dev *dev,
 				struct ci_rx_queue *rxq)
@@ -3347,6 +3365,14 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 				     dev->data->port_id);
 
 			ad->rx_vec_allowed = false;
+		}
+		if (ad->rx_vec_allowed &&
+		    i40e_rx_needs_trex_latency_scalar_path(dev)) {
+			PMD_INIT_LOG(DEBUG,
+				"TRex hardware-filter latency queues use scalar Rx on port=%d.",
+				dev->data->port_id);
+			ad->rx_vec_allowed = false;
+			ad->rx_bulk_alloc_allowed = false;
 		}
 		if (ad->rx_vec_allowed) {
 			for (i = 0; i < dev->data->nb_rx_queues; i++) {
